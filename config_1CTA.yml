@@ -1,0 +1,84 @@
+---
+- name: VLAN via TELNET (pipe) - sem autenticação
+  hosts: switches
+  gather_facts: no
+  connection: local
+
+  vars:
+    telnet_host: "{{ hostvars[inventory_hostname].ansible_host | default(inventory_hostname) }}"
+    telnet_port: 23
+    vlan_id: 10
+    vlan_name: "Dados"
+
+  tasks:
+    - name: Configuracao geral e de VLAN 
+      shell: |
+        set -o pipefail
+        {
+          sleep 1
+          printf "\r";                      sleep 1
+          printf "terminal length 0\r";     sleep 1
+          printf "conf t\r";                 sleep 1
+
+          # Hostname
+          printf "hostname {{ inventory_hostname }}\r"; sleep 1
+
+          # Syslog
+          printf "logging host 10.25.108.13\r"; sleep 1
+
+          # NTP
+          printf "ntp server 10.25.108.25\r"; sleep 1
+
+          # Timezone
+          printf "clock timezone BRT -3\r"; sleep 1
+      
+          # VTP transparente (para permitir VLAN extendida e evitar surpresas)
+          printf "vtp mode transparent\r"; sleep 1
+
+          # VLAN de Gerência
+          printf "vlan 1008\r";            sleep 1
+          printf " name Gerenciamento\r";  sleep 1
+          printf "exit\r";                 sleep 1
+
+          # SVI de Gerência
+          printf "interface vlan 1008\r";                      sleep 1
+          printf " ip address {{ vlan1008_ip }} {{ vlan1008_mask }}\r"; sleep 1
+          printf " no shutdown\r";                              sleep 1
+        
+          printf "end\r";                    sleep 1
+          printf "wr mem\r";                 sleep 1
+          printf "exit\r"
+        } | telnet {{ hostvars[inventory_hostname].ansible_host }} 23
+      args:
+        executable: /bin/bash
+      register: telnet_out
+      failed_when: false
+      changed_when: "'% Invalid input' not in (telnet_out.stdout | default(''))"
+
+    - name: Habilitar L3 e rota default (somente L3)
+      shell: |
+        set -o pipefail
+        {
+          sleep 1
+          printf "\r";                  sleep 1
+          printf "terminal length 0\r"; sleep 1
+          printf "conf t\r";            sleep 1
+          
+          # Habilitar roteamento e rota default
+          printf "ip routing\r";        sleep 1
+          printf "ip route 0.0.0.0 0.0.0.0 {{ default_route }}\r"; sleep 1
+          printf "end\r";               sleep 1
+          printf "wr mem\r";            sleep 1
+          printf "exit\r"
+        } | telnet {{ hostvars[inventory_hostname].ansible_host }} {{ telnet_port | default(23) }}
+      args: { executable: /bin/bash }
+      when: "hostvars[inventory_hostname].is_l3 | default(false)"
+      register: telnet_l3_out
+      failed_when: false
+      changed_when: "'% Invalid input' not in (telnet_l3_out.stdout | default(''))"
+
+    - name: Diagnóstico (stdout)
+      debug:
+       var: telnet_out.stdout_lines
+
+
